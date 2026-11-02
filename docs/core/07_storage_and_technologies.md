@@ -7,6 +7,7 @@
 - Исходные файлы лежат в долговременном хранилище core по пути `/storage/<source_id>/<record_id>/<file_id>.<исходное расширение>`; ни пути, ни хэша в БД нет. Данные для задач лежат во временном `task_storage` на файловой системе (не в БД; путь выводится из `record_id` и `element_id`) и удаляются очисткой хранилищ целым каталогом записи (3.3).
 - Все поля с данными, специфичными для источника или типа файла (`metadata`, `meta`), имеют тип JSONB.
 - Пользователи, настройки регистрации, приглашения и регистрации агентов/скрапперов хранятся в core, а не в параметрах клиента. Owner у record, agent и scraper — внешний ключ на app_user. Индекс record(owner, trust_level, id) поддерживает обязательный фильтр доступа; индексы agent(owner) и scraper(owner) — списки в кабинете. Между пользователями общих record и таблицы связи владельцев нет. Удаление пользователя не должно каскадно уничтожать его записи: вместо этого учётную запись блокируют; отдельный сценарий окончательного удаления данных не входит в этот контракт.
+- ID компонентов постоянны; вместо хеширования agent_id хранится token_hash. Удаление скраппера логическое: token отзывается, строка сохраняется для record.scrapper, ID не переиспользуется. Core проверяет совпадение owner скраппера и записи и заполняет scrapper из авторизованной регистрации при приёме; клиент изменить его не может. Токены очередей выдаются реестром и требуют доступного серверу секрета; правило хранения только хеша относится к token регистрации компонента.
 - Индексы: внешние ключи дочерних таблиц (`file.record_id`, `fragment.record_id`, `fragment.file_id`, `fragment.parent_fragment_id`, `element.record_id`, `element.file_id`, `element.fragment_id`, `text.*_id`, `chunk.*_id`, `task.element_id`) для проверки готовности; частичные индексы очередей `task (type, created_at) WHERE status = 'wait'` и `chunk (created_at) WHERE status = 'wait'`; частичные индексы `task (taken_by) WHERE status = 'processing'` и `chunk (taken_by) WHERE status = 'processing'` для возврата задач по `POST /api/task-sources/{task_source_id}/reset` и при старте core; частичные индексы `WHERE status = 'error'` на `fragment`, `element`, `text`, `chunk` и `task` для цикла очистки по таймеру; частичный индекс `file (finished_at) WHERE status = 'error'` для списка ошибок внутри записей в `done`; индекс HNSW `chunk USING hnsw (embed halfvec_cosine_ops)` для семантического поиска; частичный индекс `record (id) WHERE status = 'parsing'` для удаления прерванных записей при старте; частичный индекс `record (processed_at) WHERE status = 'error'` для списка ошибочных записей в веб-интерфейсе; уникальный индекс `record(owner, source_id, source_url)`.
 - Ограничения: у `chunk` заполнены ровно один родитель и ровно одно из `text` и `is_picture`, длина текста ограничена; у `text` набор заполненных ссылок согласован с `kind` (см. 1.5); в `wait` поля `taken_at` и `taken_by` пусты, в `processing` заполнены; иерархические правила из 1.1 проверяются при построении дерева в коде (на уровне БД — при необходимости constraint-триггерами).
 - Эмбеддинги лежат в столбце типа `halfvec(2048)`: 2048 — размерность Qwen3-VL-Embedding-2B (см. таблицу моделей). Индексы pgvector (HNSW, IVFFlat) по типу `vector` ограничены 2000 измерениями, а по `halfvec` — 4000. В `halfvec` каждое число занимает 16 бит вместо 32: вектор весит 4 КБ вместо 8, а точности хватает, так как модель и так считает в BF16. Если сменить модель на размерность больше 4000, векторы придётся урезать (MRL). В chunk хранится название модели (`embed_model`), чтобы при смене модели можно было пересчитать эмбеддинги.
@@ -46,27 +47,39 @@ CREATE TABLE invitation (
 );
 
 CREATE TABLE agent (
-  id             uuid PRIMARY KEY,  -- несекретный task_source_id
-  agent_id_hash  text NOT NULL UNIQUE,  -- хеш выданного core секретного agent_id
+  agent_id       uuid PRIMARY KEY,  -- задаётся при создании, совпадает с task_source_id
+  token_hash     text NOT NULL UNIQUE,  -- хеш автоматически созданного token
   owner          uuid NOT NULL REFERENCES app_user(id),
   mode           text NOT NULL,  -- отдельная регистрация каждого режима
   trust_level    integer NOT NULL CHECK (trust_level >= 0),
   task_endpoint  text NOT NULL,  -- общий адрес допустим, маршрутизация по task_source_id
-  enabled        boolean NOT NULL DEFAULT true
+  enabled        boolean NOT NULL DEFAULT true,
+  deleted_at     timestamptz  -- регистрация сохраняется после окончательного удаления
 );
 
 CREATE TABLE scraper (
-  scraper_id    uuid PRIMARY KEY,
+  scrapper_id    uuid PRIMARY KEY,
   owner         uuid NOT NULL REFERENCES app_user(id),
   source_id     text NOT NULL,
   web_endpoint  text,
-  secret_hash   text NOT NULL UNIQUE,
-  enabled       boolean NOT NULL DEFAULT true
+  token_hash    text NOT NULL UNIQUE,
+  enabled       boolean NOT NULL DEFAULT true,
+  deleted_at    timestamptz  -- удалённый скраппер нельзя включить повторно
 );
+
+-- Единственная служебная регистрация создаётся при настройке сервера.
+CREATE TABLE balancer (
+  balancer_id  text PRIMARY KEY,
+  token_hash   text NOT NULL UNIQUE,
+  enabled      boolean NOT NULL DEFAULT true
+);
+-- Token API очередей отдельного task_source_id хранится отдельно от token
+-- регистрации балансировщика; его проверка привязана к balancer_id и источнику.
 
 CREATE TABLE record (
   id                 uuid PRIMARY KEY,
   owner              uuid NOT NULL REFERENCES app_user(id),
+  scrapper           uuid NOT NULL REFERENCES scraper(scrapper_id) ON DELETE RESTRICT,
   trust_level        integer NOT NULL CHECK (trust_level >= 0),
   source_id          text NOT NULL,
   source_url         text NOT NULL,
@@ -85,6 +98,7 @@ CREATE TABLE record (
 );
 
 CREATE INDEX ON record (owner, trust_level, id);
+CREATE INDEX ON record (scrapper);
 CREATE INDEX ON agent (owner);
 CREATE INDEX ON scraper (owner);
 

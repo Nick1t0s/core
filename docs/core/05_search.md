@@ -4,4 +4,4 @@
 
 Агент обращается к поисковому API core из режима ИИ-агента и из ручного поиска. Оба режима доступны в веб-интерфейсе и Telegram-боте и используют одни эндпоинты `GET /api/search/schema`, `POST /api/search`, `POST /api/read`, описанные в [спецификации агента](../agent/README.md). Детали реализации поиска в core остаются в разработке.
 
-HTTP-методы, параметры, заголовок `Authorization: Bearer <agent_id>` и примеры ответов закреплены в [HTTP API](../api.md).
+HTTP-методы, параметры, заголовки `X-Agent-ID: <agent_id>` и `Authorization: Bearer <token агента>` и примеры ответов закреплены в [HTTP API](../api.md).
