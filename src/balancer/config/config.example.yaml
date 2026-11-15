@@ -1,0 +1,8 @@
+# Замените token на токен своего сервера.
+core_url: http://127.0.0.1:8000
+token: CHANGE_ME
+delay: 20
+check_delay: 20
+retry_delay: 5
+http_timeout: 30
+temp_dir: ./tmp
