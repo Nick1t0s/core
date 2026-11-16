@@ -52,7 +52,7 @@ class Task:
 @dataclass
 class Batch:
     tasks: tuple[Task, ...]
-    results: list[dict] | None = field(default=None, init=False)
+    results: dict[str, str | None] | None = field(default=None, init=False)
 
     def __post_init__(self):
         if not isinstance(self.tasks, tuple) or not self.tasks:
@@ -92,14 +92,8 @@ class Batch:
             )
             for task in self.tasks:
                 task.transcribe(model, config.language)
-        self.results = [
-            {"task_id": task.task_id, "payload": {"text": task.text}}
-            for task in self.tasks
-        ]
+        self.results = {task.task_id: task.text for task in self.tasks}
 
-    def write(self, stream: TextIO | None = None) -> None:
+    def write(self) -> None:
         """Вывести JSON только после успешной обработки всей пачки."""
-        if self.results is None:
-            raise BatchError("Пачка ещё не распознана полностью")
-        print(json.dumps({"results": self.results}, ensure_ascii=False),
-              file=stream if stream is not None else sys.stdout)
+        print(json.dumps(self.results, ensure_ascii=False))
