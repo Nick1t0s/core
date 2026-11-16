@@ -21,3 +21,7 @@
 | Транскрибирование | whisper large-v3-turbo |
 | OCR | PaddleOCR-VL + раскладка |
 
+
+## Текущая реализация воркера
+
+Фактический запуск реализованного воркера транскрибации описан в [README transcribe](../src/balancer/workers/transcribe/README.md): обязательный YAML-конфиг, JSON-список `task_id`/`path` на stdin и JSON-словарь `task_id → text` на stdout. Демон балансировщика и воркеры OCR/эмбеддингов пока не реализованы.
