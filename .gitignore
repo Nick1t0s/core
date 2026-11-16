@@ -6,3 +6,4 @@ src/balancer/tmp/
 /BALANCER_IMPLEMENTATION.md
 /src/balancer/workers/transcribe/.venv/
 /src/balancer/.venv/
+/src/balancer/workers/transcribe/config.yaml
