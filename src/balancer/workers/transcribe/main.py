@@ -10,30 +10,20 @@ from config import Config
 
 def read_tasks(stream) -> list[dict]:
     """Проверить всю пачку до загрузки модели и обработки файлов."""
-    data = json.load(stream)
-    if not isinstance(data, dict) or set(data) != {"type", "tasks"}:
-        raise ValueError("Ожидаются поля type и tasks")
-    if data["type"] != "transcribe":
-        raise ValueError("Ожидается type=transcribe")
-    tasks = data["tasks"]
+    tasks = json.load(stream)
     if not isinstance(tasks, list) or not tasks:
-        raise ValueError("tasks должен быть непустым массивом")
+        raise ValueError("Ожидается непустой массив задач")
     task_ids = set()
     for task in tasks:
-        if not isinstance(task, dict) or set(task) != {"task_id", "input"}:
-            raise ValueError("У задачи ожидаются поля task_id и input")
+        if not isinstance(task, dict) or set(task) != {"task_id", "path"}:
+            raise ValueError("У задачи ожидаются поля task_id и path")
         task_id = task["task_id"]
         if not isinstance(task_id, str) or not task_id or task_id in task_ids:
             raise ValueError("task_id должен быть непустой уникальной строкой")
         task_ids.add(task_id)
-        source = task["input"]
-        if not isinstance(source, dict) or set(source) != {"path", "mime"}:
-            raise ValueError("У input ожидаются поля path и mime")
-        path = source["path"]
+        path = task["path"]
         if not isinstance(path, str) or not Path(path).is_absolute() or not Path(path).is_file():
-            raise ValueError("input.path должен указывать на существующий абсолютный путь к файлу")
-        if not isinstance(source["mime"], str) or not source["mime"].strip():
-            raise ValueError("input.mime должен быть непустой строкой")
+            raise ValueError("path должен указывать на существующий абсолютный путь к файлу")
     return tasks
 
 
@@ -50,7 +40,7 @@ def transcribe(tasks: list[dict], config: Config) -> list[dict]:
         )
         results = []
         for task in tasks:
-            segments, _ = model.transcribe(task["input"]["path"], language=config.language)
+            segments, _ = model.transcribe(task["path"], language=config.language)
             text = "".join(segment.text for segment in segments).strip()
             results.append({"task_id": task["task_id"], "payload": {"text": text}})
     return results
