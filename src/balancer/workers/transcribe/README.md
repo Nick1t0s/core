@@ -30,11 +30,7 @@
 частичные результаты не выводятся. Пустая транскрипция допустима. Входные файлы
 воркер не удаляет и не изменяет.
 
-Отдельный файл можно распознать с выводом обычного текста:
-
-```bash
-~/whisper-venv/bin/python src/balancer/workers/transcribe/main.py --file /tmp/input.wav --config /path/to/config.yaml
-```
+Для одного файла передаётся JSON-пачка с одной задачей в том же формате.
 
 Собственный YAML-конфиг воркер читает через `--config /path/to/config.yaml`.
 Образец — [config.example.yaml](config.example.yaml). В YAML все четыре поля
@@ -53,9 +49,3 @@
 и появляется ошибка `libcublas.so.12`, добавьте перед запуском их каталоги
 `site-packages/nvidia/cublas/lib`, `site-packages/nvidia/cudnn/lib` и
 `site-packages/nvidia/cuda_nvrtc/lib` в `LD_LIBRARY_PATH`.
-
-Проверки из корня проекта:
-
-```bash
-~/whisper-venv/bin/python -B -m unittest discover -s tests -v
-```

@@ -59,23 +59,14 @@ def transcribe(tasks: list[dict], config: Config) -> list[dict]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, help="YAML-конфиг воркера")
-    parser.add_argument("--file", type=Path, help="Один аудиофайл вместо JSON-пачки на stdin")
     args = parser.parse_args(argv)
 
     try:
         config = Config.from_yaml(args.config) if args.config else Config()
-        if args.file is not None:
-            if not args.file.is_file():
-                raise ValueError("--file должен указывать на существующий файл")
-            tasks = [{"task_id": "file", "input": {"path": str(args.file.resolve())}}]
-        else:
-            tasks = read_tasks(sys.stdin)
+        tasks = read_tasks(sys.stdin)
         results = transcribe(tasks, config)
         # При ошибке любой задачи ни один частичный результат не публикуется.
-        if args.file is not None:
-            print(results[0]["payload"]["text"])
-        else:
-            print(json.dumps({"results": results}, ensure_ascii=False))
+        print(json.dumps({"results": results}, ensure_ascii=False))
     except Exception as exc:
         print(f"transcribe: {exc}", file=sys.stderr)
         return 1
