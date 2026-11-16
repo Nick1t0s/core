@@ -10,7 +10,7 @@
 Запуск из корня проекта для обработки JSON-пачки балансировщика:
 
 ```bash
-~/whisper-venv/bin/python -m src.balancer.workers.transcribe.main < batch.json
+~/whisper-venv/bin/python src/balancer/workers/transcribe/main.py < batch.json
 ```
 
 Вход — один JSON-документ на stdin; после записи stdin нужно закрыть:
@@ -33,18 +33,18 @@
 Отдельный файл можно распознать с выводом обычного текста:
 
 ```bash
-~/whisper-venv/bin/python -m src.balancer.workers.transcribe.main --file /tmp/input.wav --language ru
+~/whisper-venv/bin/python src/balancer/workers/transcribe/main.py --file /tmp/input.wav --config /path/to/config.yaml
 ```
 
 Собственный YAML-конфиг воркер читает через `--config /path/to/config.yaml`.
 Образец — [config.example.yaml](config.example.yaml). Поля необязательны:
 пропущенные получают значения по умолчанию. Конфиг представлен классом `Config`
 с методами `from_dict` и `from_yaml`; балансировщик его не импортирует.
-Параметры CLI `--model`, `--device`, `--compute-type`, `--language` переопределяют YAML.
-Модель выбирает сам воркер: `--model` имеет приоритет над полем `model` в YAML,
-затем используется значение по умолчанию `large-v3-turbo`. Балансировщик передаёт
+Настройки `model`, `device`, `compute_type` и `language` задаются только в YAML;
+без конфига используются значения по умолчанию. Модель выбирает сам воркер:
+поле `model` в YAML или значение по умолчанию `large-v3-turbo`. Балансировщик передаёт
 тип задачи и входные файлы; название модели в JSON-пачку не входит.
-Для CPU нужно явно выбрать `--device cpu --compute-type int8`.
+Для CPU в YAML нужно указать `device: cpu` и `compute_type: int8`.
 
 Зависимости перечислены в [requirements.txt](requirements.txt). Декодирование
 выполняется через PyAV; отдельная проверка системного `ffmpeg` не нужна

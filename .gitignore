@@ -4,3 +4,5 @@ src/balancer/tmp/
 /src/balancer/config/config.yaml
 /Заявка_ИВР.txt
 /BALANCER_IMPLEMENTATION.md
+/src/balancer/workers/transcribe/.venv/
+/src/balancer/.venv/

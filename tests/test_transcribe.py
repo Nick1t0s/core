@@ -6,8 +6,11 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
-from src.balancer.workers.transcribe.config import Config
-from src.balancer.workers.transcribe.main import main
+from src.balancer.workers.transcribe import config
+
+Config = config.Config
+with patch.dict("sys.modules", {"config": config}):
+    from src.balancer.workers.transcribe.main import main
 
 
 class TranscribeTests(unittest.TestCase):
@@ -79,18 +82,18 @@ class TranscribeTests(unittest.TestCase):
                 self.assertTrue(stderr)
         self.factory.assert_not_called()
 
-    def test_file_and_yaml_config_with_cli_override(self):
+    def test_file_and_yaml_config(self):
         config_path = self.path.parent / "config.yaml"
         config_path.write_text("device: cpu\ncompute_type: int8\nlanguage: ru\n", encoding="utf-8")
         self.model.transcribe.return_value = (iter([SimpleNamespace(text=" Текст ")]), None)
         code, stdout, stderr = self.run_worker(None, [
-            "--file", str(self.path), "--config", str(config_path), "--language", "en",
+            "--file", str(self.path), "--config", str(config_path),
         ])
         self.assertEqual((code, stdout, stderr), (0, "Текст\n", ""))
         self.factory.assert_called_once_with(
             "large-v3-turbo", device="cpu", compute_type="int8", local_files_only=False,
         )
-        self.model.transcribe.assert_called_once_with(str(self.path), language="en")
+        self.model.transcribe.assert_called_once_with(str(self.path), language="ru")
 
     def test_invalid_config(self):
         for data in (None, [], {"workers": {}}, {"model": ""}, {"device": "invalid"},

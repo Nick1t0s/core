@@ -2,15 +2,10 @@
 
 import argparse
 from contextlib import redirect_stdout
-from dataclasses import asdict
 import json
 from pathlib import Path
 import sys
-
-if __package__:
-    from .config import Config
-else:
-    from config import Config
+from config import Config
 
 
 def read_tasks(stream) -> list[dict]:
@@ -64,20 +59,11 @@ def transcribe(tasks: list[dict], config: Config) -> list[dict]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, help="YAML-конфиг воркера")
-    parser.add_argument("--model", help="Имя или локальный путь к модели")
-    parser.add_argument("--device", choices=("cuda", "cpu", "auto"))
-    parser.add_argument("--compute-type", help="Тип вычислений CTranslate2")
-    parser.add_argument("--language", help="Код языка; по умолчанию автоопределение")
     parser.add_argument("--file", type=Path, help="Один аудиофайл вместо JSON-пачки на stdin")
     args = parser.parse_args(argv)
 
     try:
         config = Config.from_yaml(args.config) if args.config else Config()
-        overrides = {
-            name: value for name in ("model", "device", "compute_type", "language")
-            if (value := getattr(args, name)) is not None
-        }
-        config = Config.from_dict(asdict(config) | overrides)
         if args.file is not None:
             if not args.file.is_file():
                 raise ValueError("--file должен указывать на существующий файл")
