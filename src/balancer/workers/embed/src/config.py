@@ -26,6 +26,7 @@ class Config:
 
     @classmethod
     def from_dict(cls, value: object) -> "Config":
+        """Проверяет поля и значения настроек и создаёт конфигурацию."""
         data = fields(value, {
             "model", "device", "compute_type", "text_batch_size", "image_batch_size",
             "max_tokens", "max_image_pixels", "instruction",
@@ -41,22 +42,23 @@ class Config:
             raise ConfigError("compute_type: ожидается bfloat16, float16 или float32")
         if device == "cpu" and compute_type != "float32":
             raise ConfigError("Для CPU требуется compute_type: float32")
-        max_tokens = positive_integer(data["max_tokens"], "max_tokens")
-        max_pixels = positive_integer(data["max_image_pixels"], "max_image_pixels")
+        max_tokens = positive_integer(data["max_tokens"], "max_tokens", ConfigError)
+        max_pixels = positive_integer(data["max_image_pixels"], "max_image_pixels", ConfigError)
         if max_tokens > 32768:
             raise ConfigError("max_tokens не должен превышать 32768")
         if max_pixels < 4096 or max_pixels % 1024:
             raise ConfigError("max_image_pixels: требуется кратное 1024 число не меньше 4096")
         return cls(
             model, device, compute_type,
-            positive_integer(data["text_batch_size"], "text_batch_size"),
-            positive_integer(data["image_batch_size"], "image_batch_size"),
+            positive_integer(data["text_batch_size"], "text_batch_size", ConfigError),
+            positive_integer(data["image_batch_size"], "image_batch_size", ConfigError),
             max_tokens, max_pixels,
             nonempty_string(data["instruction"], "instruction", ConfigError),
         )
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "Config":
+        """Читает YAML-файл и создаёт проверенную конфигурацию."""
         try:
             with Path(path).open(encoding="utf-8") as stream:
                 data: object = yaml.safe_load(stream)

@@ -19,30 +19,36 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def config() -> Config:
+    """Загружает конфигурацию для тестов из примера воркера."""
     return Config.from_yaml(ROOT / "config.example.yaml")
 
 
 def image_base64() -> str:
+    """Создаёт тестовое красное PNG-изображение и кодирует его в base64."""
     buffer = BytesIO()
     Image.new("RGB", (64, 64), "red").save(buffer, format="PNG")
     return base64.b64encode(buffer.getvalue()).decode("ascii")
 
 
 def vector() -> list[float]:
+    """Создаёт нормализованный тестовый вектор размерности модели."""
     return [1.0] + [0.0] * (DIMENSIONS - 1)
 
 
 class RecordingEmbedder:
     def __init__(self) -> None:
+        """Создаёт пустой список вызовов тестового эмбеддера."""
         self.calls: list[tuple[Task, ...]] = []
 
     def embed(self, tasks: tuple[Task, ...]) -> list[list[float]]:
+        """Запоминает переданные задачи и возвращает тестовые векторы."""
         self.calls.append(tasks)
         return [vector() for _ in tasks]
 
 
 class FailingEmbedder(RecordingEmbedder):
     def embed(self, tasks: tuple[Task, ...]) -> list[list[float]]:
+        """Возвращает тестовые векторы при первом вызове, затем имитирует сбой GPU."""
         if self.calls:
             raise RuntimeError("GPU OOM")
         return super().embed(tasks)
@@ -50,6 +56,7 @@ class FailingEmbedder(RecordingEmbedder):
 
 class ContractTests(unittest.TestCase):
     def test_mixed_input_separate_batches_and_id_mapping(self) -> None:
+        """Проверяет разделение входов на батчи и привязку векторов к задачам."""
         batch = Batch.from_json(StringIO(json.dumps([
             {"task_id": "image", "image": image_base64()},
             *[{"task_id": str(index), "text": "я" * 2000} for index in range(9)],
@@ -68,6 +75,7 @@ class ContractTests(unittest.TestCase):
         self.assertIn('"embeddings":', output.getvalue())
 
     def test_bad_inputs_rejected(self) -> None:
+        """Проверяет отклонение некорректных пачек и входных данных задач."""
         cases = [
             "[]", "{}", '{"type":"embed","tasks":[]}',
             '[{"task_id":"1","text":"a","image":"AA=="}]',
@@ -85,6 +93,7 @@ class ContractTests(unittest.TestCase):
                 Batch.from_json(StringIO(source))
 
     def test_failed_later_group_cannot_publish_partial_results(self) -> None:
+        """Проверяет запрет частичного результата при сбое последующего батча."""
         batch = Batch.from_json(StringIO(json.dumps([
             {"task_id": str(index), "text": "Текст"} for index in range(9)
         ])))
@@ -97,6 +106,7 @@ class ContractTests(unittest.TestCase):
         self.assertEqual(output.getvalue(), "")
 
     def test_invalid_model_outputs_rejected(self) -> None:
+        """Проверяет отклонение некорректных векторов модели."""
         for value in ([], [[0.0] * DIMENSIONS], [[1.0]],
                       [[True] + [0.0] * (DIMENSIONS - 1)],
                       [[float("nan")] + [0.0] * (DIMENSIONS - 1)],
@@ -105,6 +115,7 @@ class ContractTests(unittest.TestCase):
                 validate_vectors(value, 1)
 
     def test_config_rejects_missing_unknown_and_invalid_fields(self) -> None:
+        """Проверяет отклонение неполной конфигурации, лишних полей и неверных значений."""
         valid = dict(vars(config()))
         invalid: list[dict[str, object]] = [
             {}, {**valid, "unknown": 1}, {**valid, "text_batch_size": True},
@@ -117,12 +128,14 @@ class ContractTests(unittest.TestCase):
                 Config.from_dict(value)
 
     def test_image_is_decoded_in_memory_as_rgb(self) -> None:
+        """Проверяет декодирование изображения в памяти в формат RGB."""
         task = Task.from_dict({"task_id": "1", "image": image_base64()})
         with task.open_image() as image:
             self.assertEqual(image.mode, "RGB")
             self.assertEqual(image.size, (64, 64))
 
     def test_exif_orientation_is_applied(self) -> None:
+        """Проверяет поворот изображения по EXIF-ориентации."""
         buffer = BytesIO()
         image = Image.new("RGB", (32, 64), "red")
         exif = Image.Exif()
@@ -135,6 +148,7 @@ class ContractTests(unittest.TestCase):
             self.assertEqual(decoded.size, (64, 32))
 
     def test_animated_image_is_rejected(self) -> None:
+        """Проверяет отклонение многокадрового изображения."""
         buffer = BytesIO()
         Image.new("RGB", (32, 32), "red").save(
             buffer, format="GIF", save_all=True,
@@ -146,6 +160,7 @@ class ContractTests(unittest.TestCase):
             })
 
     def test_cli_invalid_input_has_empty_stdout(self) -> None:
+        """Проверяет код ошибки и пустой stdout при некорректном входе CLI."""
         result = subprocess.run(
             [sys.executable, str(ROOT / "src/main.py"), "--config", str(ROOT / "config.example.yaml")],
             input="[]", text=True, capture_output=True, check=False,
@@ -155,6 +170,7 @@ class ContractTests(unittest.TestCase):
         self.assertIn("embed:", result.stderr)
 
     def test_cli_requires_config(self) -> None:
+        """Проверяет обязательность аргумента конфигурации в CLI."""
         result = subprocess.run(
             [sys.executable, str(ROOT / "src/main.py")],
             input="[]", text=True, capture_output=True, check=False,
@@ -163,10 +179,12 @@ class ContractTests(unittest.TestCase):
         self.assertEqual(result.stdout, "")
 
     def test_entry_point_outputs_result_only(self) -> None:
+        """Проверяет, что stdout содержит результат, а диагностика попадает в stderr."""
         import main
 
         class NoisyEmbedder(RecordingEmbedder):
             def __init__(self, settings: Config) -> None:
+                """Создаёт тестовый эмбеддер и печатает диагностику загрузки."""
                 super().__init__()
                 print("model load diagnostic")
 

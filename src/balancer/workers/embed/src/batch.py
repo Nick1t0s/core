@@ -3,6 +3,7 @@
 import base64
 import binascii
 from dataclasses import dataclass, field
+from functools import partial
 from io import BytesIO
 import json
 import math
@@ -22,6 +23,7 @@ class Task:
 
     @classmethod
     def from_dict(cls, value: object) -> "Task":
+        """Проверяет задачу с текстом или base64-изображением и создаёт её объект."""
         if not isinstance(value, dict):
             raise TaskError("Задача должна быть JSON-объектом")
         content = "text" if "text" in value else "image"
@@ -47,6 +49,7 @@ class Task:
         return task
 
     def open_image(self) -> Image.Image:
+        """Декодирует неподвижное изображение в RGB с учётом EXIF-ориентации."""
         if self.image_bytes is None:
             raise TaskError("У текстовой задачи нет изображения")
         try:
@@ -60,10 +63,13 @@ class Task:
 
 
 class Embedder(Protocol):
-    def embed(self, tasks: tuple[Task, ...]) -> list[list[float]]: ...
+    def embed(self, tasks: tuple[Task, ...]) -> list[list[float]]:
+        """Возвращает векторы задач в порядке их передачи."""
+        ...
 
 
 def validate_vectors(value: object, expected_count: int) -> list[list[float]]:
+    """Проверяет число, размерность, конечность и нормализацию векторов."""
     if not isinstance(value, list) or len(value) != expected_count:
         raise BatchError("Число эмбеддингов не совпадает с числом задач")
     result: list[list[float]] = []
@@ -95,9 +101,12 @@ class Batch:
 
     @classmethod
     def from_json(cls, stream: TextIO) -> "Batch":
+        """Читает JSON-пачку и проверяет задачи и уникальность их идентификаторов."""
         try:
             data: object = json.load(
-                stream, object_pairs_hook=unique_object, parse_constant=invalid_constant,
+                stream,
+                object_pairs_hook=partial(unique_object, error=BatchError),
+                parse_constant=partial(invalid_constant, error=BatchError),
             )
         except (OSError, UnicodeError, ValueError, RecursionError) as exc:
             raise BatchError("Не удалось прочитать JSON-пачку") from exc
@@ -109,6 +118,7 @@ class Batch:
         return cls(tasks)
 
     def embed(self, config: Config, model: Embedder) -> None:
+        """Обрабатывает текстовые и графические батчи и сохраняет полный результат."""
         self.results = None
         results: dict[str, list[float]] = {}
         for is_text, size in ((True, config.text_batch_size), (False, config.image_batch_size)):
@@ -120,6 +130,7 @@ class Batch:
         self.results = results
 
     def write(self, stream: TextIO) -> None:
+        """Записывает модель и эмбеддинги обработанной пачки в поток как JSON."""
         if self.results is None:
             raise BatchError("Пачка ещё не обработана")
         document = json.dumps(

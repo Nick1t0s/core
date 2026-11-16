@@ -13,6 +13,7 @@ from validation import BatchError, ConfigError
 
 class QwenEmbedder:
     def __init__(self, config: Config) -> None:
+        """Проверяет устройство и загружает локальные веса и процессор модели."""
         self.config = config
         if config.device == "cuda":
             if not torch.cuda.is_available():
@@ -42,6 +43,7 @@ class QwenEmbedder:
         self.processor = processor
 
     def embed(self, tasks: tuple[Task, ...]) -> list[list[float]]:
+        """Подготавливает входы и вычисляет нормализованные векторы последних токенов."""
         with ExitStack() as stack:
             conversations: list[list[dict[str, object]]] = []
             images: list[Image.Image] = []
