@@ -1,7 +1,7 @@
 """Разбор, проверка и транскрибация пачки задач."""
 
 from contextlib import redirect_stdout
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import json
 from pathlib import Path
 import sys
@@ -14,10 +14,11 @@ if TYPE_CHECKING:
     from faster_whisper import WhisperModel
 
 
-@dataclass(frozen=True)
+@dataclass
 class Task:
     task_id: str
     path: Path
+    text: str | None = field(default=None, init=False)
 
     def __post_init__(self):
         if not isinstance(self.task_id, str) or not self.task_id:
@@ -32,17 +33,26 @@ class Task:
             raise TaskError("path должен быть строкой")
         return cls(task_id=data["task_id"], path=Path(data["path"]))
 
-    def transcribe(self, model: "WhisperModel", language: str | None) -> dict:
-        """Распознать файл с уже загруженной моделью."""
+    def transcribe(self, model: "WhisperModel", language: str | None) -> None:
+        """Сохранить транскрипцию с таймкодами начала сегментов."""
+        self.text = None
         with redirect_stdout(sys.stderr):
             segments, _ = model.transcribe(str(self.path), language=language)
-            text = "".join(segment.text for segment in segments).strip()
-        return {"task_id": self.task_id, "payload": {"text": text}}
+            lines = []
+            for segment in segments:
+                text = " ".join(segment.text.split())
+                if not text:
+                    continue
+                hours, remainder = divmod(int(segment.start), 3600)
+                minutes, seconds = divmod(remainder, 60)
+                lines.append(f"[{hours:02d}:{minutes:02d}:{seconds:02d}] {text}")
+        self.text = "\n".join(lines)
 
 
-@dataclass(frozen=True)
+@dataclass
 class Batch:
     tasks: tuple[Task, ...]
+    results: list[dict] | None = field(default=None, init=False)
 
     def __post_init__(self):
         if not isinstance(self.tasks, tuple) or not self.tasks:
@@ -66,8 +76,11 @@ class Batch:
             raise BatchError("Не удалось прочитать JSON-пачку") from exc
         return cls.from_list(data)
 
-    def transcribe(self, config: Config) -> list[dict]:
+    def transcribe(self, config: Config) -> None:
         """Загрузить модель один раз и последовательно распознать всю пачку."""
+        self.results = None
+        for task in self.tasks:
+            task.text = None
         with redirect_stdout(sys.stderr):
             from faster_whisper import WhisperModel
 
@@ -77,4 +90,16 @@ class Batch:
                 compute_type=config.compute_type,
                 local_files_only=False,
             )
-            return [task.transcribe(model, config.language) for task in self.tasks]
+            for task in self.tasks:
+                task.transcribe(model, config.language)
+        self.results = [
+            {"task_id": task.task_id, "payload": {"text": task.text}}
+            for task in self.tasks
+        ]
+
+    def write(self, stream: TextIO | None = None) -> None:
+        """Вывести JSON только после успешной обработки всей пачки."""
+        if self.results is None:
+            raise BatchError("Пачка ещё не распознана полностью")
+        print(json.dumps({"results": self.results}, ensure_ascii=False),
+              file=stream if stream is not None else sys.stdout)

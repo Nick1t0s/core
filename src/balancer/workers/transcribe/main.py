@@ -1,7 +1,6 @@
 """Транскрибация локальных аудиофайлов через faster-whisper."""
 
 import argparse
-import json
 from pathlib import Path
 import sys
 from config import Config
@@ -16,9 +15,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         config = Config.from_yaml(args.config)
         batch = Batch.from_json(sys.stdin)
-        results = batch.transcribe(config)
-        # При ошибке любой задачи ни один частичный результат не публикуется.
-        print(json.dumps({"results": results}, ensure_ascii=False))
+        batch.transcribe(config)
+        batch.write()
     except Exception as exc:
         print(f"transcribe: {exc}", file=sys.stderr)
         return 1
