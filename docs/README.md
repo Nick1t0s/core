@@ -24,4 +24,4 @@
 
 ## Текущая реализация воркера
 
-Фактический запуск реализованного воркера транскрибации описан в [README transcribe](../src/balancer/workers/transcribe/README.md): обязательный YAML-конфиг, JSON-список `task_id`/`path` на stdin и JSON-словарь `task_id → text` на stdout. Реализован также [воркер embed](../src/balancer/workers/embed/README.md): JSON-массив задач с текстом или base64-изображением на stdin; `embed_model` один раз на пачку и словарь `embeddings` по ID на stdout. Входы embed обрабатываются в памяти. Демон балансировщика и воркер OCR пока не реализованы.
+Фактический запуск реализованного воркера транскрибации описан в [README transcribe](../src/balancer/workers/transcribe/README.md): обязательный YAML-конфиг, JSON-список `task_id`/`audio` (base64) на stdin и JSON-словарь `task_id → text` на stdout. Реализован также [воркер embed](../src/balancer/workers/embed/README.md): JSON-массив задач с текстом или base64-изображением на stdin; `embed_model` один раз на пачку и словарь `embeddings` по ID на stdout. Входы embed обрабатываются в памяти. Демон балансировщика и воркер OCR пока не реализованы.

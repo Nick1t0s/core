@@ -1,4 +1,4 @@
-"""Транскрибация локальных аудиофайлов через faster-whisper."""
+"""Транскрибация base64-аудио из JSON-пачки через faster-whisper."""
 
 import argparse
 from pathlib import Path

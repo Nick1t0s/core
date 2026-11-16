@@ -2,13 +2,15 @@
 
 from contextlib import redirect_stdout
 from dataclasses import dataclass, field
+import base64
+import binascii
+from io import BytesIO
 import json
-from pathlib import Path
 import sys
 from typing import TYPE_CHECKING, TextIO, cast
 
 from config import Config
-from validation import BatchError, TaskError, _fields
+from validation import BatchError, TaskError, _fields, _string, _unique_object, _invalid_constant
 
 if TYPE_CHECKING:
     from faster_whisper import WhisperModel
@@ -17,31 +19,31 @@ if TYPE_CHECKING:
 @dataclass
 class Task:
     task_id: str
-    path: Path
+    audio: bytes
     text: str | None = field(default=None, init=False)
 
     def __post_init__(self) -> None:
-        if not isinstance(self.task_id, str) or not self.task_id:
+        if not isinstance(self.task_id, str) or not self.task_id.strip():
             raise TaskError("task_id должен быть непустой строкой")
-        if not isinstance(self.path, Path) or not self.path.is_absolute() or not self.path.is_file():
-            raise TaskError("path должен указывать на существующий абсолютный путь к файлу")
+        if not isinstance(self.audio, bytes) or not self.audio:
+            raise TaskError("audio должен содержать непустые байты аудиофайла")
 
     @classmethod
     def from_dict(cls, data: object) -> "Task":
-        fields = _fields(data, {"task_id", "path"}, "task", TaskError)
-        task_id = fields["task_id"]
-        path = fields["path"]
-        if not isinstance(task_id, str) or not task_id:
-            raise TaskError("task_id должен быть непустой строкой")
-        if not isinstance(path, str):
-            raise TaskError("path должен быть строкой")
-        return cls(task_id=task_id, path=Path(path))
+        fields = _fields(data, {"task_id", "audio"}, "task", TaskError)
+        task_id = _string(fields["task_id"], "task_id", TaskError)
+        encoded = _string(fields["audio"], "audio", TaskError)
+        try:
+            audio = base64.b64decode(encoded, validate=True)
+        except (ValueError, binascii.Error) as exc:
+            raise TaskError("audio: ожидается стандартная base64 без data URI") from exc
+        return cls(task_id=task_id, audio=audio)
 
     def transcribe(self, model: "WhisperModel", language: str | None) -> None:
         """Сохранить транскрипцию с таймкодами начала сегментов."""
         self.text = None
-        with redirect_stdout(sys.stderr):
-            segments, _ = model.transcribe(str(self.path), language=language)
+        with redirect_stdout(sys.stderr), BytesIO(self.audio) as audio:
+            segments, _ = model.transcribe(audio, language=language)
             lines: list[str] = []
             for segment in segments:
                 text = " ".join(segment.text.split())
@@ -76,8 +78,10 @@ class Batch:
     @classmethod
     def from_json(cls, stream: TextIO) -> "Batch":
         try:
-            data: object = json.load(stream)
-        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            data: object = json.load(
+                stream, object_pairs_hook=_unique_object, parse_constant=_invalid_constant,
+            )
+        except (OSError, UnicodeError, ValueError, RecursionError) as exc:
             raise BatchError("Не удалось прочитать JSON-пачку") from exc
         return cls.from_list(data)
 
@@ -93,7 +97,7 @@ class Batch:
                 config.model,
                 device=config.device,
                 compute_type=config.compute_type,
-                local_files_only=False,
+                local_files_only=True,
             )
             for task in self.tasks:
                 task.transcribe(model, config.language)
