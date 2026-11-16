@@ -10,10 +10,10 @@ from validation import ConfigError, _fields
 
 @dataclass(frozen=True)
 class Config:
-    model: str = "large-v3-turbo"
-    device: str = "cuda"
-    compute_type: str = "float16"
-    language: str | None = None
+    model: str
+    device: str
+    compute_type: str
+    language: str | None
 
     @classmethod
     def from_dict(cls, data: dict) -> "Config":

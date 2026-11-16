@@ -58,11 +58,11 @@ def transcribe(tasks: list[dict], config: Config) -> list[dict]:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config", type=Path, help="YAML-конфиг воркера")
+    parser.add_argument("--config", type=Path, required=True, help="YAML-конфиг воркера")
     args = parser.parse_args(argv)
 
     try:
-        config = Config.from_yaml(args.config) if args.config else Config()
+        config = Config.from_yaml(args.config)
         tasks = read_tasks(sys.stdin)
         results = transcribe(tasks, config)
         # При ошибке любой задачи ни один частичный результат не публикуется.
