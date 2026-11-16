@@ -17,7 +17,7 @@ class Config:
 
     @classmethod
     def from_dict(cls, data: dict) -> "Config":
-        _fields(data, {"model", "device", "compute_type", "language"}, "config")
+        _fields(data, {"model", "device", "compute_type", "language"}, "config", ConfigError)
         config = cls(**data)
         for name in ("model", "device", "compute_type"):
             value = getattr(config, name)
