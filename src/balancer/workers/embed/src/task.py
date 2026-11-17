@@ -31,7 +31,7 @@ class Task:
     def from_dict(cls, value: object) -> TextTask | ImageTask:
         """Создаёт задачу подходящего типа по набору её входных полей."""
         try:
-            return TypeAdapter(TextTask | ImageTask).validate_python(value)
+            return TypeAdapter[TextTask | ImageTask](TextTask | ImageTask).validate_python(value)
         except ValidationError as exc:
             raise TaskError(str(exc)) from exc
 
