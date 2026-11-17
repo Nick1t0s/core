@@ -14,6 +14,7 @@ transcribe/
 ├── src/
 │   ├── main.py
 │   ├── batch.py        # Task и Batch
+│   ├── audio.py        # Audio: байты аудиофайла и поток для распознавания
 │   ├── config.py
 │   └── validation.py
 ├── config.yaml         # локальный конфиг, исключён из Git
@@ -110,7 +111,9 @@ JSON, base64 и декодированные байты всей пачки за
 
 ## Классы и ошибки
 
-- `Task.from_dict()` проверяет поля, ID и base64, сохраняет байты в `task.audio`; `Task.transcribe(model, language)`
+- `Audio.from_base64()` декодирует base64 и хранит непустые байты в `audio.data`.
+  `Audio.open()` создаёт новый `BytesIO`; вызывающий код закрывает его после чтения сегментов.
+- `Task.from_dict()` проверяет поля и ID, создаёт объект `Audio` в `task.audio`; `Task.transcribe(model, language)`
   сохраняет склеенный текст в `task.text` и возвращает `None`.
 - `Batch.from_list()` и `Batch.from_json()` создают пачку и проверяют состав и ID.
   `Batch.transcribe(config)` сбрасывает старые результаты, загружает одну модель,

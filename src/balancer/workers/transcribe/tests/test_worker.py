@@ -63,9 +63,10 @@ class ContractTests(unittest.TestCase):
         FakeWhisper.instances.clear()
 
     def test_audio_bytes_round_trip(self) -> None:
+        """Проверяет сохранение всех входных байтов в объекте аудио задачи."""
         audio = bytes(range(256))
         batch = Batch.from_json(StringIO(json.dumps([task("1", audio)])))
-        self.assertEqual(batch.tasks[0].audio, audio)
+        self.assertEqual(batch.tasks[0].audio.data, audio)
 
     def test_rejects_invalid_inputs_and_old_paths(self) -> None:
         invalid = [

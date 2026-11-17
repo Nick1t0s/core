@@ -2,13 +2,11 @@
 
 from contextlib import redirect_stdout
 from dataclasses import dataclass, field
-import base64
-import binascii
-from io import BytesIO
 import json
 import sys
 from typing import TYPE_CHECKING, TextIO, cast
 
+from audio import Audio
 from config import Config
 from validation import BatchError, TaskError, _fields, _string, _unique_object, _invalid_constant
 
@@ -19,30 +17,26 @@ if TYPE_CHECKING:
 @dataclass
 class Task:
     task_id: str
-    audio: bytes
+    audio: Audio
     text: str | None = field(default=None, init=False)
 
     def __post_init__(self) -> None:
+        """Проверяет непустой идентификатор задачи."""
         if not isinstance(self.task_id, str) or not self.task_id.strip():
             raise TaskError("task_id должен быть непустой строкой")
-        if not isinstance(self.audio, bytes) or not self.audio:
-            raise TaskError("audio должен содержать непустые байты аудиофайла")
 
     @classmethod
     def from_dict(cls, data: object) -> "Task":
+        """Проверяет поля задачи и создаёт объект аудио из base64."""
         fields = _fields(data, {"task_id", "audio"}, "task", TaskError)
         task_id = _string(fields["task_id"], "task_id", TaskError)
         encoded = _string(fields["audio"], "audio", TaskError)
-        try:
-            audio = base64.b64decode(encoded, validate=True)
-        except (ValueError, binascii.Error) as exc:
-            raise TaskError("audio: ожидается стандартная base64 без data URI") from exc
-        return cls(task_id=task_id, audio=audio)
+        return cls(task_id=task_id, audio=Audio.from_base64(encoded))
 
     def transcribe(self, model: "WhisperModel", language: str | None) -> None:
         """Сохранить транскрипцию с таймкодами начала сегментов."""
         self.text = None
-        with redirect_stdout(sys.stderr), BytesIO(self.audio) as audio:
+        with redirect_stdout(sys.stderr), self.audio.open() as audio:
             segments, _ = model.transcribe(audio, language=language)
             lines: list[str] = []
             for segment in segments:
