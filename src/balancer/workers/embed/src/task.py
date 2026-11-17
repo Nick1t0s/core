@@ -2,19 +2,30 @@
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, TYPE_CHECKING
 
 from pydantic import Field, TypeAdapter, ValidationError, field_validator
 from pydantic.dataclasses import dataclass
 
 from config import MAX_TEXT_CHARACTERS
+from embeddings import Embedding
 from image import EncodedImage
 from validation import NonEmptyString, TaskError, VALIDATION_CONFIG
+
+if TYPE_CHECKING:
+    from model import QwenEmbedder
 
 
 @dataclass(frozen=True, config=VALIDATION_CONFIG)
 class Task:
     task_id: NonEmptyString
+
+    def embed(self, model: QwenEmbedder) -> Embedding:
+        """Вычисляет эмбеддинг задачи и возвращает проверенный вектор."""
+        try:
+            return Embedding(model.embed(self))
+        except ValidationError as exc:
+            raise TaskError(str(exc)) from exc
 
     @classmethod
     def from_dict(cls, value: object) -> TextTask | ImageTask:

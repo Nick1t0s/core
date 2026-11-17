@@ -8,8 +8,8 @@ import torch
 from transformers import Qwen3VLForConditionalGeneration, Qwen3VLModel, Qwen3VLProcessor
 
 from config import Config, DIMENSIONS
-from task import ImageTask, TextTask
-from validation import BatchError, ConfigError
+from task import ImageTask, Task, TextTask
+from validation import BatchError, ConfigError, TaskError
 
 
 class QwenEmbedder:
@@ -43,16 +43,18 @@ class QwenEmbedder:
         torch.nn.Module.eval(self.model)
         self.processor = processor
 
-    def embed(self, task: TextTask | ImageTask) -> list[float]:
+    def embed(self, task: Task) -> list[float]:
         """Подготавливает одну задачу и вычисляет нормализованный вектор последнего токена."""
         with ExitStack() as stack:
             content: list[dict[str, str]]
             images: list[Image.Image] = []
             if isinstance(task, TextTask):
                 content = [{"type": "text", "text": task.text}]
-            else:
+            elif isinstance(task, ImageTask):
                 images.append(stack.enter_context(task.image.open()))
                 content = [{"type": "image"}]
+            else:
+                raise TaskError("Для эмбеддинга требуется TextTask или ImageTask")
             conversation: list[dict[str, object]] = [
                 {"role": "system", "content": [{"type": "text", "text": self.config.instruction}]},
                 {"role": "user", "content": content},

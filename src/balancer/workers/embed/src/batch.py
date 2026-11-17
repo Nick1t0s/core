@@ -1,23 +1,22 @@
 """Входная пачка и последовательная обработка задач."""
 
+from __future__ import annotations
+
 from dataclasses import field
 from functools import partial
 import json
-from typing import Annotated, Protocol, TextIO
+from typing import Annotated, TYPE_CHECKING, TextIO
 
-from pydantic import Field, TypeAdapter, ValidationError
+from pydantic import Field, TypeAdapter
 from pydantic.dataclasses import dataclass
 
 from config import MODEL_NAME
-from embeddings import Embedding
 from task import ImageTask, TextTask
 from validation import BatchError, VALIDATION_CONFIG, invalid_constant, unique_object
 
 
-class Embedder(Protocol):
-    def embed(self, task: TextTask | ImageTask) -> list[float]:
-        """Вычисляет вектор одной текстовой или графической задачи."""
-        ...
+if TYPE_CHECKING:
+    from model import QwenEmbedder
 
 
 @dataclass(config=VALIDATION_CONFIG)
@@ -43,15 +42,12 @@ class Batch:
         except (OSError, UnicodeError, ValueError, RecursionError) as exc:
             raise BatchError("Не удалось прочитать JSON-пачку") from exc
 
-    def embed(self, model: Embedder) -> None:
+    def embed(self, model: QwenEmbedder) -> None:
         """Последовательно вычисляет векторы и сохраняет только полный результат."""
         self.results = None
         results: dict[str, list[float]] = {}
         for task in self.tasks:
-            try:
-                embedding = Embedding(model.embed(task))
-            except ValidationError as exc:
-                raise BatchError(str(exc)) from exc
+            embedding = task.embed(model)
             results[task.task_id] = embedding.vector
         self.results = results
 

@@ -16,6 +16,7 @@ from batch import Batch
 from embeddings import Embedding
 from config import Config, DIMENSIONS
 from image import EncodedImage
+from model import QwenEmbedder
 from task import ImageTask, Task, TextTask
 from validation import BatchError, ConfigError, TaskError
 
@@ -39,19 +40,19 @@ def vector() -> list[float]:
     return [1.0] + [0.0] * (DIMENSIONS - 1)
 
 
-class RecordingEmbedder:
+class RecordingEmbedder(QwenEmbedder):
     def __init__(self) -> None:
         """Создаёт пустой список вызовов тестового эмбеддера."""
-        self.calls: list[TextTask | ImageTask] = []
+        self.calls: list[Task] = []
 
-    def embed(self, task: TextTask | ImageTask) -> list[float]:
+    def embed(self, task: Task) -> list[float]:
         """Запоминает переданные задачи и возвращает тестовые векторы."""
         self.calls.append(task)
         return vector()
 
 
 class FailingEmbedder(RecordingEmbedder):
-    def embed(self, task: TextTask | ImageTask) -> list[float]:
+    def embed(self, task: Task) -> list[float]:
         """Возвращает тестовые векторы при первом вызове, затем имитирует сбой GPU."""
         if self.calls:
             raise RuntimeError("GPU OOM")
@@ -59,6 +60,17 @@ class FailingEmbedder(RecordingEmbedder):
 
 
 class ContractTests(unittest.TestCase):
+    def test_task_calculates_and_validates_its_embedding(self) -> None:
+        """Проверяет расчёт и отклонение неверного вектора самой задачей."""
+        task = TextTask("text", "Текст")
+        model = RecordingEmbedder()
+        embedding = task.embed(model)
+        self.assertEqual(embedding.vector, vector())
+        self.assertEqual(model.calls, [task])
+        with patch.object(model, "embed", return_value=[0.0] * DIMENSIONS):
+            with self.assertRaises(TaskError):
+                task.embed(model)
+
     def test_mixed_input_processed_individually_and_id_mapping(self) -> None:
         """Проверяет обработку задач по одной и привязку векторов к идентификаторам."""
         batch = Batch.from_json(StringIO(json.dumps([
