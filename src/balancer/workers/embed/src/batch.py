@@ -1,58 +1,62 @@
-"""Пачка текстов и изображений в памяти, без входных файлов."""
+"""Входная пачка и последовательная обработка задач."""
 
-from dataclasses import dataclass, field
+from dataclasses import field
 from functools import partial
 import json
-from typing import Iterator, TextIO
+from typing import Annotated, Protocol, TextIO
 
-from config import Config, MODEL_NAME
-from inference import Embedder, InferenceBatch, InferenceImageBatch, InferenceTextBatch
-from task import ImageTask, Task, TextTask, task_from_dict
-from validation import BatchError, invalid_constant, unique_object
+from pydantic import Field, TypeAdapter, ValidationError
+from pydantic.dataclasses import dataclass
+
+from config import MODEL_NAME
+from embeddings import Embedding
+from task import ImageTask, TextTask
+from validation import BatchError, VALIDATION_CONFIG, invalid_constant, unique_object
 
 
-@dataclass
+class Embedder(Protocol):
+    def embed(self, task: TextTask | ImageTask) -> list[float]:
+        """Вычисляет вектор одной текстовой или графической задачи."""
+        ...
+
+
+@dataclass(config=VALIDATION_CONFIG)
 class Batch:
-    tasks: tuple[TextTask | ImageTask, ...]
+    tasks: Annotated[tuple[TextTask | ImageTask, ...], Field(min_length=1)]
     results: dict[str, list[float]] | None = field(default=None, init=False)
+
+    def __post_init__(self) -> None:
+        """Проверяет уникальность идентификаторов после проверки всех задач."""
+        if len({task.task_id for task in self.tasks}) != len(self.tasks):
+            raise BatchError("task_id должен быть уникальным в пачке")
 
     @classmethod
     def from_json(cls, stream: TextIO) -> "Batch":
-        """Читает JSON-пачку и проверяет задачи и уникальность их идентификаторов."""
+        """Читает JSON-массив и создаёт пачку с автоматической проверкой задач."""
         try:
             data: object = json.load(
                 stream,
                 object_pairs_hook=partial(unique_object, error=BatchError),
                 parse_constant=partial(invalid_constant, error=BatchError),
             )
+            return TypeAdapter(cls).validate_python({"tasks": data})
         except (OSError, UnicodeError, ValueError, RecursionError) as exc:
             raise BatchError("Не удалось прочитать JSON-пачку") from exc
-        if not isinstance(data, list) or not data:
-            raise BatchError("Ожидается непустой массив задач")
-        tasks = tuple(task_from_dict(item) for item in data)
-        if len({task.task_id for task in tasks}) != len(tasks):
-            raise BatchError("task_id должен быть уникальным в пачке")
-        return cls(tasks)
 
-    def embed(self, config: Config, model: Embedder) -> None:
-        """Обрабатывает текстовые и графические батчи и сохраняет полный результат."""
+    def embed(self, model: Embedder) -> None:
+        """Последовательно вычисляет векторы и сохраняет только полный результат."""
         self.results = None
         results: dict[str, list[float]] = {}
-        for group in self.inference_batches(config):
-            results.update(group.embed(model))
+        for task in self.tasks:
+            try:
+                embedding = Embedding(model.embed(task))
+            except ValidationError as exc:
+                raise BatchError(str(exc)) from exc
+            results[task.task_id] = embedding.vector
         self.results = results
 
-    def inference_batches(self, config: Config) -> Iterator[InferenceBatch[Task]]:
-        """Выдаёт однородные батчи заданного размера: сначала тексты, затем изображения."""
-        texts = tuple(task for task in self.tasks if isinstance(task, TextTask))
-        for start in range(0, len(texts), config.text_batch_size):
-            yield InferenceTextBatch(texts[start:start + config.text_batch_size])
-        images = tuple(task for task in self.tasks if isinstance(task, ImageTask))
-        for start in range(0, len(images), config.image_batch_size):
-            yield InferenceImageBatch(images[start:start + config.image_batch_size])
-
     def write(self, stream: TextIO) -> None:
-        """Записывает модель и эмбеддинги обработанной пачки в поток как JSON."""
+        """Записывает JSON только после успешной обработки всей пачки."""
         if self.results is None:
             raise BatchError("Пачка ещё не обработана")
         document = json.dumps(

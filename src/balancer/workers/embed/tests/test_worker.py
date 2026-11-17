@@ -1,7 +1,6 @@
 """Контракт процесса и атомарность обработки без загрузки весов."""
 
 import base64
-from dataclasses import replace
 from io import BytesIO, StringIO
 import json
 from pathlib import Path
@@ -11,20 +10,21 @@ import unittest
 from unittest.mock import patch
 
 from PIL import Image
+from pydantic import TypeAdapter, ValidationError
 
 from batch import Batch
+from embeddings import Embedding
 from config import Config, DIMENSIONS
 from image import EncodedImage
-from inference import InferenceBatch, InferenceImageBatch, InferenceTextBatch, validate_vectors
-from task import ImageTask, Task, TextTask, task_from_dict
+from task import ImageTask, Task, TextTask
 from validation import BatchError, ConfigError, TaskError
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 def config() -> Config:
-    """Загружает пример конфигурации с фиксированными размерами тестовых батчей."""
-    return replace(Config.from_yaml(ROOT / "config.example.yaml"), text_batch_size=8, image_batch_size=1)
+    """Загружает пример конфигурации воркера."""
+    return Config.from_yaml(ROOT / "config.example.yaml")
 
 
 def image_base64() -> str:
@@ -42,36 +42,35 @@ def vector() -> list[float]:
 class RecordingEmbedder:
     def __init__(self) -> None:
         """Создаёт пустой список вызовов тестового эмбеддера."""
-        self.calls: list[InferenceBatch[Task]] = []
+        self.calls: list[TextTask | ImageTask] = []
 
-    def embed(self, batch: InferenceBatch[Task]) -> list[list[float]]:
+    def embed(self, task: TextTask | ImageTask) -> list[float]:
         """Запоминает переданные задачи и возвращает тестовые векторы."""
-        self.calls.append(batch)
-        return [vector() for _ in batch.tasks]
+        self.calls.append(task)
+        return vector()
 
 
 class FailingEmbedder(RecordingEmbedder):
-    def embed(self, batch: InferenceBatch[Task]) -> list[list[float]]:
+    def embed(self, task: TextTask | ImageTask) -> list[float]:
         """Возвращает тестовые векторы при первом вызове, затем имитирует сбой GPU."""
         if self.calls:
             raise RuntimeError("GPU OOM")
-        return super().embed(batch)
+        return super().embed(task)
 
 
 class ContractTests(unittest.TestCase):
-    def test_mixed_input_separate_batches_and_id_mapping(self) -> None:
-        """Проверяет разделение входов на батчи и привязку векторов к задачам."""
+    def test_mixed_input_processed_individually_and_id_mapping(self) -> None:
+        """Проверяет обработку задач по одной и привязку векторов к идентификаторам."""
         batch = Batch.from_json(StringIO(json.dumps([
             {"task_id": "image", "image": image_base64()},
             *[{"task_id": str(index), "text": "я" * 2000} for index in range(9)],
         ])))
         model = RecordingEmbedder()
-        batch.embed(config(), model)
-        self.assertEqual([len(group.tasks) for group in model.calls], [8, 1, 1])
-        self.assertTrue(all(isinstance(group, InferenceTextBatch) for group in model.calls[:2]))
-        self.assertIsInstance(model.calls[-1], InferenceImageBatch)
-        self.assertEqual([task.task_id for group in model.calls[:2] for task in group.tasks], list(map(str, range(9))))
-        self.assertEqual(model.calls[-1].tasks[0].task_id, "image")
+        batch.embed(model)
+        self.assertEqual(len(model.calls), 10)
+        self.assertIsInstance(model.calls[0], ImageTask)
+        self.assertTrue(all(isinstance(task, TextTask) for task in model.calls[1:]))
+        self.assertEqual([task.task_id for task in model.calls], ["image", *map(str, range(9))])
         output = StringIO()
         batch.write(output)
         data: object = json.loads(output.getvalue())
@@ -98,13 +97,13 @@ class ContractTests(unittest.TestCase):
             with self.subTest(source=source[:90]), self.assertRaises((TaskError, BatchError)):
                 Batch.from_json(StringIO(source))
 
-    def test_failed_later_group_cannot_publish_partial_results(self) -> None:
-        """Проверяет запрет частичного результата при сбое последующего батча."""
+    def test_failed_later_task_cannot_publish_partial_results(self) -> None:
+        """Проверяет запрет частичного результата при сбое последующей задачи."""
         batch = Batch.from_json(StringIO(json.dumps([
             {"task_id": str(index), "text": "Текст"} for index in range(9)
         ])))
         with self.assertRaises(RuntimeError):
-            batch.embed(config(), FailingEmbedder())
+            batch.embed(FailingEmbedder())
         self.assertIsNone(batch.results)
         output = StringIO()
         with self.assertRaises(BatchError):
@@ -113,19 +112,19 @@ class ContractTests(unittest.TestCase):
 
     def test_invalid_model_outputs_rejected(self) -> None:
         """Проверяет отклонение некорректных векторов модели."""
-        for value in ([], [[0.0] * DIMENSIONS], [[1.0]],
-                      [[True] + [0.0] * (DIMENSIONS - 1)],
-                      [[float("nan")] + [0.0] * (DIMENSIONS - 1)],
-                      [[float("inf")] + [0.0] * (DIMENSIONS - 1)]):
-            with self.subTest(value=str(value)[:30]), self.assertRaises(BatchError):
-                validate_vectors(value, 1)
+        for value in ([], [0.0] * DIMENSIONS, [1.0],
+                      [True] + [0.0] * (DIMENSIONS - 1),
+                      [float("nan")] + [0.0] * (DIMENSIONS - 1),
+                      [float("inf")] + [0.0] * (DIMENSIONS - 1)):
+            with self.subTest(value=str(value)[:30]), self.assertRaises(ValidationError):
+                TypeAdapter(Embedding).validate_python({"vector": value})
 
     def test_config_rejects_missing_unknown_and_invalid_fields(self) -> None:
         """Проверяет отклонение неполной конфигурации, лишних полей и неверных значений."""
         valid = dict(vars(config()))
         invalid: list[dict[str, object]] = [
-            {}, {**valid, "unknown": 1}, {**valid, "text_batch_size": True},
-            {**valid, "image_batch_size": 0}, {**valid, "max_tokens": 32769},
+            {}, {**valid, "unknown": 1}, {**valid, "max_tokens": True},
+            {**valid, "max_tokens": 0}, {**valid, "max_tokens": 32769},
             {**valid, "max_image_pixels": 4097}, {**valid, "model": "another/model"},
             {**valid, "device": "cpu", "compute_type": "bfloat16"},
         ]
@@ -135,7 +134,7 @@ class ContractTests(unittest.TestCase):
 
     def test_image_is_decoded_in_memory_as_rgb(self) -> None:
         """Проверяет декодирование изображения в памяти в формат RGB."""
-        task = task_from_dict({"task_id": "1", "image": image_base64()})
+        task = Task.from_dict({"task_id": "1", "image": image_base64()})
         self.assertIsInstance(task, ImageTask)
         assert isinstance(task, ImageTask)
         self.assertIsInstance(task.image, EncodedImage)
@@ -150,7 +149,7 @@ class ContractTests(unittest.TestCase):
         exif = Image.Exif()
         exif[274] = 6
         image.save(buffer, format="JPEG", exif=exif)
-        task = task_from_dict({
+        task = Task.from_dict({
             "task_id": "1", "image": base64.b64encode(buffer.getvalue()).decode("ascii"),
         })
         assert isinstance(task, ImageTask)
@@ -165,43 +164,41 @@ class ContractTests(unittest.TestCase):
             append_images=[Image.new("RGB", (32, 32), "blue")],
         )
         with self.assertRaises(TaskError):
-            task_from_dict({
+            Task.from_dict({
                 "task_id": "1", "image": base64.b64encode(buffer.getvalue()).decode("ascii"),
             })
 
     def test_text_task_preserves_input(self) -> None:
         """Проверяет создание текстовой задачи с сохранением исходных пробелов."""
-        task = task_from_dict({"task_id": "text", "text": "  Привет\n"})
+        task = Task.from_dict({"task_id": "text", "text": "  Привет\n"})
         self.assertEqual(task, TextTask("text", "  Привет\n"))
 
-    def test_single_modality_uses_only_its_batch_type(self) -> None:
-        """Проверяет отсутствие пустых батчей и соблюдение обоих лимитов размера."""
-        settings = replace(config(), text_batch_size=2, image_batch_size=2)
-        for content, source, batch_type in (
-            ("text", "Текст", InferenceTextBatch),
-            ("image", image_base64(), InferenceImageBatch),
-        ):
-            with self.subTest(content=content):
-                batch = Batch.from_json(StringIO(json.dumps([
-                    {"task_id": str(index), content: source} for index in range(5)
-                ])))
-                model = RecordingEmbedder()
-                batch.embed(settings, model)
-                self.assertEqual([len(group.tasks) for group in model.calls], [2, 2, 1])
-                self.assertTrue(all(isinstance(group, batch_type) for group in model.calls))
-                self.assertEqual(
-                    [task.task_id for group in model.calls for task in group.tasks],
-                    list(map(str, range(5))),
-                )
+    def test_direct_construction_validates_data(self) -> None:
+        """Проверяет ограничения при прямом создании объектов без методов разбора."""
+        for task_id, text in (("", "Текст"), ("1", "  "), ("1", "я" * 2001), ("1", "\ud800")):
+            with self.subTest(task_id=task_id, text_length=len(text)), self.assertRaises(ValidationError):
+                TextTask(task_id, text)
+        with self.assertRaises(ValidationError):
+            EncodedImage(b"not an image")
+        with self.assertRaises(ValidationError):
+            Batch((TextTask("same", "Первый"), TextTask("same", "Второй")))
+        with self.assertRaises(ValidationError):
+            Batch(())
 
-    def test_failed_image_batch_cannot_publish_text_results(self) -> None:
+    def test_legacy_inference_settings_rejected(self) -> None:
+        """Проверяет удаление настроек внутренних инференс-батчей из конфигурации."""
+        for name in ("text_batch_size", "image_batch_size"):
+            with self.subTest(name=name), self.assertRaises(ConfigError):
+                Config.from_dict({**vars(config()), name: 8})
+
+    def test_failed_image_cannot_publish_text_results(self) -> None:
         """Проверяет атомарность результата при сбое изображения после обработки текста."""
         batch = Batch.from_json(StringIO(json.dumps([
             {"task_id": "text", "text": "Текст"},
             {"task_id": "image", "image": image_base64()},
         ])))
         with self.assertRaises(RuntimeError):
-            batch.embed(config(), FailingEmbedder())
+            batch.embed(FailingEmbedder())
         self.assertIsNone(batch.results)
         with self.assertRaises(BatchError):
             batch.write(StringIO())

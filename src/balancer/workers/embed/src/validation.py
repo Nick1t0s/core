@@ -1,6 +1,12 @@
-"""Ошибки и проверка внешних данных воркера эмбеддингов."""
+"""Типы полей, ошибки и строгий разбор JSON воркера."""
 
-from typing import cast
+from typing import Annotated
+
+from pydantic import ConfigDict, StringConstraints
+
+
+VALIDATION_CONFIG = ConfigDict(extra="forbid", hide_input_in_errors=True)
+NonEmptyString = Annotated[str, StringConstraints(strict=True, min_length=1, pattern=r"\S")]
 
 
 class ConfigError(ValueError):
@@ -12,32 +18,11 @@ class TaskError(ValueError):
 
 
 class BatchError(ValueError):
-    """Неверная пачка или результат вычислений."""
-
-
-def fields(value: object, expected: set[str], error: type[ValueError]) -> dict[str, object]:
-    """Проверяет, что передан словарь с ровно указанным набором полей."""
-    if not isinstance(value, dict) or value.keys() != expected:
-        raise error("Отсутствуют обязательные или заданы неизвестные поля")
-    return cast(dict[str, object], value)
-
-
-def nonempty_string(value: object, name: str, error: type[ValueError]) -> str:
-    """Проверяет непустую строку и возвращает её без изменения пробелов."""
-    if not isinstance(value, str) or not value.strip():
-        raise error(f"{name}: ожидается непустая строка")
-    return value
-
-
-def positive_integer(value: object, name: str, error: type[ValueError]) -> int:
-    """Проверяет положительное целое число, исключая булевы значения."""
-    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
-        raise error(f"{name}: ожидается положительное целое число")
-    return value
+    """Неверная пачка или результат обработки."""
 
 
 def unique_object(pairs: list[tuple[str, object]], error: type[ValueError]) -> dict[str, object]:
-    """Собирает JSON-объект из пар, отклоняя повторные ключи."""
+    """Собирает JSON-объект, отклоняя повторные ключи до проверки моделей."""
     result: dict[str, object] = {}
     for key, value in pairs:
         if key in result:

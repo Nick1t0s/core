@@ -1,41 +1,50 @@
-"""Текстовые и графические задачи с общим идентификатором."""
+"""Текстовые и графические задачи с проверкой при создании."""
 
-from dataclasses import dataclass
+from __future__ import annotations
+
+from typing import Annotated
+
+from pydantic import Field, TypeAdapter, ValidationError, field_validator
+from pydantic.dataclasses import dataclass
 
 from config import MAX_TEXT_CHARACTERS
 from image import EncodedImage
-from validation import TaskError, fields, nonempty_string
+from validation import NonEmptyString, TaskError, VALIDATION_CONFIG
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, config=VALIDATION_CONFIG)
 class Task:
-    task_id: str
+    task_id: NonEmptyString
+
+    @classmethod
+    def from_dict(cls, value: object) -> TextTask | ImageTask:
+        """Создаёт задачу подходящего типа по набору её входных полей."""
+        try:
+            return TypeAdapter(TextTask | ImageTask).validate_python(value)
+        except ValidationError as exc:
+            raise TaskError(str(exc)) from exc
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, config=VALIDATION_CONFIG)
 class TextTask(Task):
-    text: str
+    text: Annotated[NonEmptyString, Field(max_length=MAX_TEXT_CHARACTERS)]
+
+    def __post_init__(self) -> None:
+        """Проверяет возможность передать исходный текст в UTF-8 без изменений."""
+        try:
+            self.text.encode("utf-8")
+        except UnicodeError as exc:
+            raise TaskError("text: некорректный Unicode") from exc
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, config=VALIDATION_CONFIG)
 class ImageTask(Task):
     image: EncodedImage
 
-
-def task_from_dict(value: object) -> TextTask | ImageTask:
-    """Проверяет входные поля и создаёт текстовую или графическую задачу."""
-    if not isinstance(value, dict):
-        raise TaskError("Задача должна быть JSON-объектом")
-    content = "text" if "text" in value else "image"
-    data = fields(value, {"task_id", content}, TaskError)
-    task_id = nonempty_string(data["task_id"], "task_id", TaskError)
-    source = nonempty_string(data[content], content, TaskError)
-    if content == "text":
-        if len(source) > MAX_TEXT_CHARACTERS:
-            raise TaskError("text: максимум 2000 символов, включая пробелы")
-        try:
-            source.encode("utf-8")
-        except UnicodeError as exc:
-            raise TaskError("text: некорректный Unicode") from exc
-        return TextTask(task_id, source)
-    return ImageTask(task_id, EncodedImage.from_base64(source))
+    @field_validator("image", mode="before")
+    @classmethod
+    def decode_image(cls, value: object) -> object:
+        """Преобразует входную base64-строку в проверенный объект изображения."""
+        if isinstance(value, str):
+            return EncodedImage.from_base64(value)
+        return value

@@ -2,20 +2,18 @@
 
 import base64
 import binascii
-from dataclasses import dataclass
 from io import BytesIO
+from typing import Annotated
 
-from validation import TaskError
+from pydantic import Field
+from pydantic.dataclasses import dataclass
+
+from validation import TaskError, VALIDATION_CONFIG
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, config=VALIDATION_CONFIG)
 class Audio:
-    data: bytes
-
-    def __post_init__(self) -> None:
-        """Проверяет, что аудиофайл содержит непустые байты."""
-        if not isinstance(self.data, bytes) or not self.data:
-            raise TaskError("audio должен содержать непустые байты аудиофайла")
+    data: Annotated[bytes, Field(strict=True, min_length=1)]
 
     @classmethod
     def from_base64(cls, value: str) -> "Audio":

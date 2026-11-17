@@ -12,7 +12,10 @@ from typing import ClassVar, Iterator
 import unittest
 from unittest.mock import patch
 
-from batch import Batch
+from pydantic import ValidationError
+
+from audio import Audio
+from batch import Batch, Task
 from config import Config
 from validation import BatchError, TaskError
 
@@ -67,6 +70,17 @@ class ContractTests(unittest.TestCase):
         audio = bytes(range(256))
         batch = Batch.from_json(StringIO(json.dumps([task("1", audio)])))
         self.assertEqual(batch.tasks[0].audio.data, audio)
+
+    def test_direct_construction_validates_data(self) -> None:
+        """Проверяет ограничения аудио, задачи и пачки при прямом создании объектов."""
+        with self.assertRaises(ValidationError):
+            Audio(b"")
+        with self.assertRaises(ValidationError):
+            Task("  ", Audio(b"speech"))
+        with self.assertRaises(ValidationError):
+            Batch(())
+        with self.assertRaises(ValidationError):
+            Batch((Task("same", Audio(b"a")), Task("same", Audio(b"b"))))
 
     def test_rejects_invalid_inputs_and_old_paths(self) -> None:
         invalid = [

@@ -1,37 +1,33 @@
 """Конфигурация принадлежит воркеру и не загружается балансировщиком."""
 
-from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
+from pydantic import TypeAdapter, ValidationError
+from pydantic.dataclasses import dataclass
 import yaml
 
-from validation import ConfigError, _fields, _string
+from validation import ConfigError, NonEmptyString, VALIDATION_CONFIG
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, config=VALIDATION_CONFIG)
 class Config:
-    model: str
-    device: str
-    compute_type: str
-    language: str | None
+    model: NonEmptyString
+    device: Literal["cuda", "cpu", "auto"]
+    compute_type: NonEmptyString
+    language: NonEmptyString | None
 
     @classmethod
     def from_dict(cls, data: object) -> "Config":
-        fields = _fields(data, {"model", "device", "compute_type", "language"}, "config", ConfigError)
-        model = _string(fields["model"], "model", ConfigError)
-        device = _string(fields["device"], "device", ConfigError)
-        compute_type = _string(fields["compute_type"], "compute_type", ConfigError)
-        language = fields["language"]
-        if device not in {"cuda", "cpu", "auto"}:
-            raise ConfigError("device: ожидается cuda, cpu или auto")
-        if language is not None and (
-            not isinstance(language, str) or not language.strip()
-        ):
-            raise ConfigError("language: ожидается код языка или null")
-        return cls(model=model, device=device, compute_type=compute_type, language=language)
+        """Создаёт конфигурацию с автоматической проверкой полей Pydantic."""
+        try:
+            return TypeAdapter(cls).validate_python(data)
+        except ValidationError as exc:
+            raise ConfigError(str(exc)) from exc
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "Config":
+        """Читает YAML-файл и создаёт проверенную конфигурацию."""
         try:
             with Path(path).open(encoding="utf-8") as stream:
                 data: object = yaml.safe_load(stream)

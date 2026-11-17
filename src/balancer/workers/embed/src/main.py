@@ -41,7 +41,7 @@ def main(argv: list[str] | None = None) -> int:
             batch = Batch.from_json(sys.stdin)
             from model import QwenEmbedder
 
-            batch.embed(config, QwenEmbedder(config))
+            batch.embed(QwenEmbedder(config))
         batch.write(sys.stdout)
     except Exception as exc:
         print(f"embed: {exc}", file=sys.stderr)
