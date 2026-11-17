@@ -1,6 +1,7 @@
 """Контракт процесса и атомарность обработки без загрузки весов."""
 
 import base64
+from dataclasses import replace
 from io import BytesIO, StringIO
 import json
 from pathlib import Path
@@ -11,16 +12,19 @@ from unittest.mock import patch
 
 from PIL import Image
 
-from batch import Batch, Task, validate_vectors
+from batch import Batch
 from config import Config, DIMENSIONS
+from image import EncodedImage
+from inference import InferenceBatch, InferenceImageBatch, InferenceTextBatch, validate_vectors
+from task import ImageTask, Task, TextTask, task_from_dict
 from validation import BatchError, ConfigError, TaskError
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 def config() -> Config:
-    """Загружает конфигурацию для тестов из примера воркера."""
-    return Config.from_yaml(ROOT / "config.example.yaml")
+    """Загружает пример конфигурации с фиксированными размерами тестовых батчей."""
+    return replace(Config.from_yaml(ROOT / "config.example.yaml"), text_batch_size=8, image_batch_size=1)
 
 
 def image_base64() -> str:
@@ -38,20 +42,20 @@ def vector() -> list[float]:
 class RecordingEmbedder:
     def __init__(self) -> None:
         """Создаёт пустой список вызовов тестового эмбеддера."""
-        self.calls: list[tuple[Task, ...]] = []
+        self.calls: list[InferenceBatch[Task]] = []
 
-    def embed(self, tasks: tuple[Task, ...]) -> list[list[float]]:
+    def embed(self, batch: InferenceBatch[Task]) -> list[list[float]]:
         """Запоминает переданные задачи и возвращает тестовые векторы."""
-        self.calls.append(tasks)
-        return [vector() for _ in tasks]
+        self.calls.append(batch)
+        return [vector() for _ in batch.tasks]
 
 
 class FailingEmbedder(RecordingEmbedder):
-    def embed(self, tasks: tuple[Task, ...]) -> list[list[float]]:
+    def embed(self, batch: InferenceBatch[Task]) -> list[list[float]]:
         """Возвращает тестовые векторы при первом вызове, затем имитирует сбой GPU."""
         if self.calls:
             raise RuntimeError("GPU OOM")
-        return super().embed(tasks)
+        return super().embed(batch)
 
 
 class ContractTests(unittest.TestCase):
@@ -63,9 +67,11 @@ class ContractTests(unittest.TestCase):
         ])))
         model = RecordingEmbedder()
         batch.embed(config(), model)
-        self.assertEqual([len(group) for group in model.calls], [8, 1, 1])
-        self.assertTrue(all(task.text is not None for task in model.calls[0]))
-        self.assertIsNone(model.calls[-1][0].text)
+        self.assertEqual([len(group.tasks) for group in model.calls], [8, 1, 1])
+        self.assertTrue(all(isinstance(group, InferenceTextBatch) for group in model.calls[:2]))
+        self.assertIsInstance(model.calls[-1], InferenceImageBatch)
+        self.assertEqual([task.task_id for group in model.calls[:2] for task in group.tasks], list(map(str, range(9))))
+        self.assertEqual(model.calls[-1].tasks[0].task_id, "image")
         output = StringIO()
         batch.write(output)
         data: object = json.loads(output.getvalue())
@@ -129,8 +135,11 @@ class ContractTests(unittest.TestCase):
 
     def test_image_is_decoded_in_memory_as_rgb(self) -> None:
         """Проверяет декодирование изображения в памяти в формат RGB."""
-        task = Task.from_dict({"task_id": "1", "image": image_base64()})
-        with task.open_image() as image:
+        task = task_from_dict({"task_id": "1", "image": image_base64()})
+        self.assertIsInstance(task, ImageTask)
+        assert isinstance(task, ImageTask)
+        self.assertIsInstance(task.image, EncodedImage)
+        with task.image.open() as image:
             self.assertEqual(image.mode, "RGB")
             self.assertEqual(image.size, (64, 64))
 
@@ -141,10 +150,11 @@ class ContractTests(unittest.TestCase):
         exif = Image.Exif()
         exif[274] = 6
         image.save(buffer, format="JPEG", exif=exif)
-        task = Task.from_dict({
+        task = task_from_dict({
             "task_id": "1", "image": base64.b64encode(buffer.getvalue()).decode("ascii"),
         })
-        with task.open_image() as decoded:
+        assert isinstance(task, ImageTask)
+        with task.image.open() as decoded:
             self.assertEqual(decoded.size, (64, 32))
 
     def test_animated_image_is_rejected(self) -> None:
@@ -155,9 +165,46 @@ class ContractTests(unittest.TestCase):
             append_images=[Image.new("RGB", (32, 32), "blue")],
         )
         with self.assertRaises(TaskError):
-            Task.from_dict({
+            task_from_dict({
                 "task_id": "1", "image": base64.b64encode(buffer.getvalue()).decode("ascii"),
             })
+
+    def test_text_task_preserves_input(self) -> None:
+        """Проверяет создание текстовой задачи с сохранением исходных пробелов."""
+        task = task_from_dict({"task_id": "text", "text": "  Привет\n"})
+        self.assertEqual(task, TextTask("text", "  Привет\n"))
+
+    def test_single_modality_uses_only_its_batch_type(self) -> None:
+        """Проверяет отсутствие пустых батчей и соблюдение обоих лимитов размера."""
+        settings = replace(config(), text_batch_size=2, image_batch_size=2)
+        for content, source, batch_type in (
+            ("text", "Текст", InferenceTextBatch),
+            ("image", image_base64(), InferenceImageBatch),
+        ):
+            with self.subTest(content=content):
+                batch = Batch.from_json(StringIO(json.dumps([
+                    {"task_id": str(index), content: source} for index in range(5)
+                ])))
+                model = RecordingEmbedder()
+                batch.embed(settings, model)
+                self.assertEqual([len(group.tasks) for group in model.calls], [2, 2, 1])
+                self.assertTrue(all(isinstance(group, batch_type) for group in model.calls))
+                self.assertEqual(
+                    [task.task_id for group in model.calls for task in group.tasks],
+                    list(map(str, range(5))),
+                )
+
+    def test_failed_image_batch_cannot_publish_text_results(self) -> None:
+        """Проверяет атомарность результата при сбое изображения после обработки текста."""
+        batch = Batch.from_json(StringIO(json.dumps([
+            {"task_id": "text", "text": "Текст"},
+            {"task_id": "image", "image": image_base64()},
+        ])))
+        with self.assertRaises(RuntimeError):
+            batch.embed(config(), FailingEmbedder())
+        self.assertIsNone(batch.results)
+        with self.assertRaises(BatchError):
+            batch.write(StringIO())
 
     def test_cli_invalid_input_has_empty_stdout(self) -> None:
         """Проверяет код ошибки и пустой stdout при некорректном входе CLI."""

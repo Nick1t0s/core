@@ -1,13 +1,11 @@
 """Qwen3-VL: общий трансформер, last-token pooling и L2-нормализация."""
 
-from contextlib import ExitStack
-
-from PIL import Image
 import torch
 from transformers import Qwen3VLForConditionalGeneration, Qwen3VLModel, Qwen3VLProcessor
 
-from batch import Task, validate_vectors
 from config import Config, DIMENSIONS
+from inference import InferenceBatch, validate_vectors
+from task import Task
 from validation import BatchError, ConfigError
 
 
@@ -42,36 +40,9 @@ class QwenEmbedder:
         torch.nn.Module.eval(self.model)
         self.processor = processor
 
-    def embed(self, tasks: tuple[Task, ...]) -> list[list[float]]:
+    def embed(self, batch: InferenceBatch[Task]) -> list[list[float]]:
         """Подготавливает входы и вычисляет нормализованные векторы последних токенов."""
-        with ExitStack() as stack:
-            conversations: list[list[dict[str, object]]] = []
-            images: list[Image.Image] = []
-            for task in tasks:
-                content: list[dict[str, str]]
-                if task.text is not None:
-                    content = [{"type": "text", "text": task.text}]
-                else:
-                    images.append(stack.enter_context(task.open_image()))
-                    content = [{"type": "image"}]
-                conversations.append([
-                    {"role": "system", "content": [{"type": "text", "text": self.config.instruction}]},
-                    {"role": "user", "content": content},
-                ])
-            prompts: object = self.processor.apply_chat_template(
-                conversations, tokenize=False, add_generation_prompt=True,
-            )
-            if not isinstance(prompts, list) or not all(isinstance(item, str) for item in prompts):
-                raise BatchError("Процессор вернул неверный формат промптов")
-            if images:
-                processed = self.processor(
-                    text=prompts, images=images, padding=True, truncation=False,
-                    return_tensors="pt", min_pixels=4096, max_pixels=self.config.max_image_pixels,
-                )
-            else:
-                processed = self.processor(
-                    text=prompts, padding=True, truncation=False, return_tensors="pt",
-                )
+        processed = batch.prepare(self.processor, self.config)
         raw: object = processed.data
         if not isinstance(raw, dict):
             raise BatchError("Процессор вернул неверный формат входов")
@@ -92,8 +63,8 @@ class QwenEmbedder:
             mask = inputs["attention_mask"]
             # Работает при padding как слева, так и справа.
             positions = mask.shape[1] - 1 - mask.flip(dims=[1]).argmax(dim=1)
-            rows = torch.arange(len(tasks), device=hidden.device)
+            rows = torch.arange(len(batch.tasks), device=hidden.device)
             pooled = hidden[rows, positions].float()
             normalized = torch.nn.functional.normalize(pooled, p=2, dim=-1)
             vectors: object = normalized.cpu().tolist()
-        return validate_vectors(vectors, len(tasks))
+        return validate_vectors(vectors, len(batch.tasks))

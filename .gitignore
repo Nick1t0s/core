@@ -1,9 +1,10 @@
 __pycache__/
 *.py[cod]
+.idea/
+.venv/
 src/balancer/tmp/
 /src/balancer/config/config.yaml
 /Заявка_ИВР.txt
 /BALANCER_IMPLEMENTATION.md
-/src/balancer/workers/transcribe/.venv/
-/src/balancer/.venv/
 /src/balancer/workers/transcribe/config.yaml
+/src/balancer/workers/embed/config.yaml
